@@ -152,16 +152,3 @@ Manual: open the app, create an org → a position → an employee → a contrac
 future date and confirm it isn't current; open **System State → Run now** to trigger the daily switch.
 
 ---
-
-## Notes / deviations from the source report
-
-- The original is a NocoBase low-code deployment; this is a clean code reproduction of its **data
-  model and behavior**, not its trigger-node wiring.
-- Org/position codes are generated once at master creation and are permanent (the report re-runs
-  codegen per version, which is not correct HR behavior).
-- Contracts are created explicitly (the report auto-creates one when an employee version is created);
-  the QIS push is an empty placeholder in the report and is omitted.
-- No `users`/auth table in v1 — `createdBy`/`updatedBy` are stored as nullable `Int?`.
-- Formula fields (`age`, `country_name_code`) are computed at read time, not stored.
-- Select-field option values aren't shipped in the report; sensible defaults live in `src/lib/types.ts`
-  and are editable data.
