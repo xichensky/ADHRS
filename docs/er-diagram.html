@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>vibeHR — HRS (adhrs) ER diagram</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    margin: 0; padding: 32px; line-height: 1.6;
+    background: #f4f7fe; color: #1f2937;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #0b1020; color: #e5e7eb; } }
+  h1 { margin: 0 0 4px; font-size: 24px; }
+  h2 { margin: 36px 0 6px; font-size: 18px; border-bottom: 1px solid #6b728040; padding-bottom: 6px; }
+  .sub { color: #6b7280; margin-bottom: 8px; }
+  .legend { font-size: 13px; color: #6b7280; margin: 8px 0 20px; }
+  .legend code { background:#0000000d; padding:1px 5px; border-radius:4px; }
+  .diagram { background:#fff; border:1px solid #e5e7eb; border-radius:12px; padding:16px; overflow:auto; }
+  @media (prefers-color-scheme: dark){ .diagram{ background:#131a2d; border-color:#1f2a44; } }
+  .tbl { display:inline-block; min-width:60px; font-weight:600; }
+  .muted { color:#6b7280; font-size:13px; }
+</style>
+</head>
+<body>
+<h1>vibeHR — HRS (adhrs) ER diagram</h1>
+<div class="sub">时间轴 HR · 主表+版本表(infotype) · 31 张表 · Prisma schema · rendered with mermaid.js</div>
+<div class="sub muted">权威字段定义见 <code>prisma/schema.prisma</code> 与 <code>docs/hr-core-schema.md</code>。本图为关系概览。</div>
+<div class="legend">
+  Cardinality: <code>||--o{</code> one-to-many · <code>}o--o{</code> many-to-many (via junction) · <code>||--o|</code> one-to-zero-or-one.
+  Attribute keys: <code>PK</code> primary key · <code>FK</code> foreign key · <code>UK</code> unique.
+  命名调整：<code>adhrs_employee_versions→adhrs_employee_org_assignment</code>（组织任职）、<code>adhrs_employee_person→adhrs_employee_basic_info</code>（个人基本信息）；加班审批 m2m 已折叠为 <code>org_assignment.payment_final_approvers Json?</code>。
+</div>
+
+<h2>1 · Schema overview</h2>
+<div class="diagram">
+<pre class="mermaid">
+erDiagram
+  country ||--o{ bank : "banks"
+  country ||--o{ id_document_type : "idDocTypes"
+  country ||--o{ legal_entity_register_number_type : "regNoTypes"
+  country ||--o{ location : "locations"
+  country ||--o{ adhrs_legal_entity : "legalEntities"
+  country ||--o{ adhrs_employee_basic_info : "basicInfo"
+  country ||--o{ adhrs_employee_bank_account : "bankAccounts"
+  country ||--o{ adhrs_employee_certificate : "certificates"
+  location ||--o{ location : "children (self tree)"
+  bank ||--o{ adhrs_employee_bank_account : "accounts"
+  currency ||--o{ adhrs_employee_bank_account : "accounts"
+  currency ||--o{ adhrs_employee_compensation : "compensations"
+  id_document_type ||--o{ adhrs_employee_basic_info : "basicInfo"
+  id_document_type ||--o{ adhrs_employee_family_member : "familyMembers"
+  legal_entity_register_number_type ||--o{ adhrs_legal_entity : "legalEntities"
+
+  adhrsEmployees ||--o{ adhrsEmployeeOrgAssignment : "orgAssignments"
+  adhrsEmployees ||--o{ adhrsEmployeeOrgAssignment : "reportTo (self)"
+  adhrsEmployees ||--o{ adhrsEmployeeOrgAssignment : "operationalLeader (self)"
+  adhrsEmployees ||--o{ adhrsEmployeeOrgAssignment : "functionalLeader (self)"
+  adhrsEmployees ||--o{ adhrs_employee_basic_info : "basicInfo"
+  adhrsEmployees ||--o{ adhrs_employee_bank_account : "bankAccounts"
+  adhrsEmployees ||--o{ adhrs_employee_social_security : "socialSecurity"
+  adhrsEmployees ||--o{ adhrs_employee_compensation : "compensation"
+  adhrsEmployees ||--o{ adhrs_employee_family_member : "familyMembers"
+  adhrsEmployees ||--o{ adhrs_employee_emergency_contact : "emergencyContacts"
+  adhrsEmployees ||--o{ adhrs_employee_certificate : "certificates"
+  adhrsEmployees ||--o{ adhrs_employee_work_experience : "workExperience"
+  adhrsEmployees ||--o{ adhrs_employee_education_background : "education"
+  adhrsEmployees ||--o{ adhrs_employee_change_record : "changeRecords"
+  adhrsEmployees ||--o{ adhrs_employee_contract_person_relation : "cmsPersonMap"
+  adhrsEmployees ||--o{ adhrs_contract : "contracts"
+
+  adhrsOrganizations ||--o{ adhrsOrganizationVersions : "versions"
+  adhrsOrganizations ||--o{ adhrsOrganizationVersions : "parentOrg (self tree)"
+  adhrsOrganizations ||--o{ adhrsPositionVersions : "org"
+  adhrsOrganizations ||--o{ adhrsEmployeeOrgAssignment : "org"
+
+  adhrsPositions ||--o{ adhrsPositionVersions : "versions"
+  adhrsPositions ||--o{ adhrsPositionVersions : "parentPosition (self tree)"
+  adhrsPositions ||--o{ adhrsEmployeeOrgAssignment : "position"
+  adhrsPositions ||--o{ adhrsEmployeeOrgAssignment : "secondaryPosition"
+
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_basic_info : "basicInfo (溯源)"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_bank_account : "bankAccounts (溯源)"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_social_security : "socialSecurity (溯源)"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_compensation : "compensation (溯源)"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_change_record : "changeRecords"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_employee_contract_person_relation : "cmsPersonMap"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_contract : "employee_version"
+  location ||--o{ adhrsEmployeeOrgAssignment : "office/work_location"
+  adhrs_employee_bank_account ||--o{ adhrs_employee_compensation : "payAccount"
+
+  adhrs_hrs_contract_type ||--o{ adhrs_contract : "contracts"
+  adhrs_hrs_contract_type ||--o{ adhrs_contract_seq : "dailySeqs"
+  adhrs_hrs_contract_type ||--o{ adhrs_hrs_cms_contract_type_realtion : "cmsTypeMap"
+  adhrs_legal_entity ||--o{ adhrs_legal_entity_contract_relation : "contractRels"
+  adhrs_contract ||--o{ adhrs_legal_entity_contract_relation : "legalEntityRels"
+  adhrs_legal_entity ||--o{ adhrs_hrs_cms_legal_entity_realtion : "cmsEntityMap"
+</pre>
+</div>
+
+<h2>2 · Employee domain (master + org-assignment infotype + infotype sub-records)</h2>
+<div class="diagram">
+<pre class="mermaid">
+erDiagram
+  adhrsEmployees {
+    Int id PK
+    String code UK
+    String name
+    Boolean status
+    DateTime hireDate
+    DateTime employmentEndDate
+    Int userId
+  }
+  adhrsEmployeeOrgAssignment {
+    Int id PK
+    Int employeeId FK
+    Int orgId FK
+    Int positionId FK
+    Int secondaryPositionId FK
+    Int reportToEmployeeId FK
+    Int operationalLeaderEmployeeId FK
+    Int functionalLeaderEmployeeId FK
+    Int office_location_id FK
+    Int work_location_id FK
+    String employment_type
+    Boolean managing_people_or_not
+    Json payment_final_approvers
+    DateTime effectiveDate
+    DateTime expirationDate
+    Boolean current_version
+  }
+  adhrs_employee_basic_info {
+    Int id PK
+    Int employee_id FK
+    Int employee_version_id FK
+    String name
+    String email
+    String id_document_number
+    Int id_document_type_id FK
+    Int country_id FK
+    String nationality
+    String photo_url
+    DateTime birth_date
+    DateTime effectiveDate
+    DateTime expirationDate
+    Boolean current_version
+  }
+  adhrs_employee_compensation {
+    Int id PK
+    Int employee_id FK
+    Int employee_version_id FK
+    Int bank_account_id FK
+    Int currency_id FK
+    String pay_type
+    String pay_grade
+    String pay_level
+    Decimal base_salary
+    Json allowances
+    DateTime effective_date
+    DateTime expiration_date
+    Boolean current_version
+  }
+  adhrs_employee_bank_account {
+    Int id PK
+    Int employee_id FK
+    Int employee_version_id FK
+    String account_holder_name
+    Int bank_id FK
+    Int currency_id FK
+    Int country_id FK
+    DateTime effective_date
+    DateTime expiration_date
+    Boolean current_version
+  }
+  adhrs_employee_social_security {
+    Int id PK
+    Int employee_id FK
+    Int employee_version_id FK
+    String sscn
+    String hpf_account
+    DateTime effective_date
+    DateTime expiration_date
+    Boolean current_version
+  }
+  adhrs_employee_family_member {
+    Int id PK
+    Int employee_id FK
+    String name
+    String relationship
+    Boolean is_dependent
+    Boolean cohabiting
+  }
+  adhrs_employee_emergency_contact {
+    Int id PK
+    Int employee_id FK
+    String name
+    String phone
+    Boolean is_primary
+  }
+  adhrs_employee_certificate {
+    Int id PK
+    Int employee_id FK
+    Int country_id FK
+    String type
+    String number
+    DateTime issue_date
+    DateTime expiry_date
+  }
+  adhrs_employee_education_background {
+    Int id PK
+    Int employee_id FK
+    String degree
+    String major
+    String school_name
+  }
+  adhrs_employee_work_experience {
+    Int id PK
+    Int employee_id FK
+    String company_name
+    String job_title
+  }
+  adhrs_employee_change_record {
+    Int id PK
+    Int employee_version_id FK
+    Int employee_id FK
+    String change_type
+  }
+  adhrsEmployees ||--o{ adhrsEmployeeOrgAssignment : "employeeId"
+  adhrsEmployees ||--o{ adhrs_employee_basic_info : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_compensation : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_bank_account : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_social_security : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_family_member : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_emergency_contact : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_certificate : "employee_id"
+  adhrsEmployees ||--o{ adhrs_employee_change_record : "employee_id"
+</pre>
+</div>
+
+<h2>3 · Organization &amp; Position (master + version, self-trees)</h2>
+<div class="diagram">
+<pre class="mermaid">
+erDiagram
+  adhrsOrganizations {
+    Int id PK
+    String code UK
+    String name
+    Boolean status
+    String structureType
+  }
+  adhrsOrganizationVersions {
+    Int id PK
+    Int orgId FK
+    String name
+    String orgType
+    Int parentOrgId FK
+    DateTime effectiveDate
+    DateTime expirationDate
+    Boolean current_version
+  }
+  adhrsPositions {
+    Int id PK
+    String code UK
+    String name
+    Boolean status
+  }
+  adhrsPositionVersions {
+    Int id PK
+    Int positionId FK
+    String name
+    Int orgId FK
+    Int parentPositionId FK
+    String job_level
+    DateTime effectiveDate
+    DateTime expirationDate
+    Boolean current_version
+  }
+  adhrsOrganizations ||--o{ adhrsOrganizationVersions : "orgId"
+  adhrsOrganizations ||--o{ adhrsOrganizationVersions : "parentOrgId (tree)"
+  adhrsOrganizations ||--o{ adhrsPositionVersions : "orgId"
+  adhrsPositions ||--o{ adhrsPositionVersions : "positionId"
+  adhrsPositions ||--o{ adhrsPositionVersions : "parentPositionId (tree)"
+</pre>
+</div>
+
+<h2>4 · Contract domain (+ legal entity, contract type, CMS mappings, daily seq, code seq)</h2>
+<div class="diagram">
+<pre class="mermaid">
+erDiagram
+  adhrs_contract {
+    Int id PK
+    String conctract_no UK
+    String contract_title
+    Int contract_type_id FK
+    Int employee_id FK
+    Int employee_version_id FK
+    String action_type
+    String term_type
+    String status
+    DateTime sign_date
+    DateTime effective_date
+    DateTime expire_date
+    String cms_contract_uuid
+  }
+  adhrs_hrs_contract_type {
+    Int id PK
+    String code UK
+    String name
+  }
+  adhrs_legal_entity {
+    Int id PK
+    String entity_name
+    String register_number UK
+    Int register_number_type_id FK
+    Int country_id FK
+  }
+  adhrs_legal_entity_contract_relation {
+    Int id PK
+    Int legal_entity_id FK
+    Int contract_id FK
+  }
+  adhrs_contract_seq {
+    Int id PK
+    Int contract_type_id FK
+    DateTime seq_date
+    Int current_seq
+  }
+  adhrs_code_seq {
+    Int id PK
+    String codeType
+    String prefix
+    Int lastSeq
+  }
+  adhrs_system_state {
+    Int id PK
+    String state_key UK
+    Json state_value
+  }
+  adhrs_employee_contract_person_relation {
+    Int id PK
+    Int employee_id FK
+    Int employee_version_id FK
+    String contract_person_uuid UK
+  }
+  adhrs_hrs_cms_contract_type_realtion {
+    Int id PK
+    Int contract_type_id FK
+    String cms_contract_type_uuid UK
+  }
+  adhrs_hrs_cms_legal_entity_realtion {
+    Int id PK
+    Int legal_entity_id FK
+    String cms_legal_entity_uuid UK
+  }
+  adhrs_hrs_contract_type ||--o{ adhrs_contract : "contract_type_id"
+  adhrs_hrs_contract_type ||--o{ adhrs_contract_seq : "contract_type_id"
+  adhrs_hrs_contract_type ||--o{ adhrs_hrs_cms_contract_type_realtion : "contract_type_id"
+  adhrs_legal_entity ||--o{ adhrs_legal_entity_contract_relation : "legal_entity_id"
+  adhrs_contract ||--o{ adhrs_legal_entity_contract_relation : "contract_id"
+  adhrs_legal_entity ||--o{ adhrs_hrs_cms_legal_entity_realtion : "legal_entity_id"
+  adhrsEmployees ||--o{ adhrs_contract : "employee_id"
+  adhrsEmployeeOrgAssignment ||--o{ adhrs_contract : "employee_version_id"
+  adhrsEmployees ||--o{ adhrs_employee_contract_person_relation : "employee_id"
+</pre>
+</div>
+
+<h2>5 · Dictionaries (country hub + bank / currency / id-doc / register-type / location tree)</h2>
+<div class="diagram">
+<pre class="mermaid">
+erDiagram
+  country {
+    Int id PK
+    String country_code UK
+    String country_name
+  }
+  bank {
+    Int id PK
+    String bank_code UK
+    String bank_name
+    String bank_name_short
+    Int country_id FK
+  }
+  currency {
+    Int id PK
+    String currency_code UK
+    String currency_name
+    String symbol
+  }
+  id_document_type {
+    Int id PK
+    String document_type_name
+    Int country_id FK
+  }
+  legal_entity_register_number_type {
+    Int id PK
+    String code UK
+    String name
+    String description
+    Int country_id FK
+  }
+  location {
+    Int id PK
+    String code UK
+    String name
+    Int level
+    Int country_id FK
+    Int parentId FK
+  }
+  country ||--o{ bank : "country_id"
+  country ||--o{ id_document_type : "country_id"
+  country ||--o{ legal_entity_register_number_type : "country_id"
+  country ||--o{ location : "country_id"
+  location ||--o{ location : "parentId (self tree)"
+</pre>
+</div>
+
+<p class="muted">
+  每张业务表还含审计字段 <code>createdAt</code>、<code>updatedAt</code>、<code>createdBy Int?</code>、<code>updatedBy Int?</code>、<code>tenantId Int?</code>（预留多租户）；主表/版本表及软删除子表另含 <code>deletedAt DateTime?</code>。
+  时间轴：层级/任职外键均指向主表，"按时间点解析"靠读时助手（见 <code>docs/hr-core-schema.md</code> 末节），永不翻转外键。
+  权威字段定义见 <code>prisma/schema.prisma</code>。
+</p>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose",
+    er: { useMaxWidth: true, minEntityWidth: 120, entityPadding: 12 } });
+</script>
+</body>
+</html>

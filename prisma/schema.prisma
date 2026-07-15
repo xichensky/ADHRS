@@ -1,0 +1,853 @@
+// ============================================================================
+// vibeHR — HRS (platform app-code "adhrs") reproduction
+// ----------------------------------------------------------------------------
+// Prisma schema. Written ONCE; runs on both SQLite (dev) and MySQL (prod).
+//
+// To deploy to MySQL:
+//   1) change  provider = "sqlite"  ->  provider = "mysql"
+//   2) set DATABASE_URL to a mysql:// connection string
+//   3) npx prisma migrate deploy   (or npx prisma db push)
+//
+// Portability rules applied to EVERY model (see plan):
+//   - IDs / FKs use Int @default(autoincrement())  (NOT BigInt — keeps JSON safe)
+//   - No @db.* provider-specific modifiers
+//   - DateTime for all timestamps/dates (stored/compared in UTC)
+//   - Json? for opaque blobs (state_value, attachments, payment_final_approvers)
+//   - deletedAt DateTime? on tables the source marks soft-deletable
+//     (Phase 1: also added to the 3 core masters + their version tables)
+//   - createdBy/updatedBy Int?  (no `users` table in v1)
+//   - tenantId Int? on every business (non-dictionary) table — reserved for a
+//     future multi-tenant Prisma client extension; nullable + unused in v1.
+//   - @@map snake_case physical table names; model names stay faithful to doc
+//   - report typos preserved verbatim: conctract_no, *_realtion
+// ============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // DEV: sqlite  |  PROD: mysql  (flip this + DATABASE_URL)
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Domain dictionaries (reference) — build + seed first.
+// These are GLOBAL (no tenantId): shared reference data across tenants.
+// ============================================================================
+
+model country {
+  id                  Int                                 @id @default(autoincrement())
+  country_code        String
+  country_name        String
+  // country_name_code is a FORMULA in the source ("Name (CODE)"); computed at read.
+  banks               bank[]
+  idDocumentTypes     id_document_type[]
+  registerNumberTypes legal_entity_register_number_type[]
+  locations           location[]
+  legalEntities       adhrs_legal_entity[]
+  persons             adhrs_employee_basic_info[]
+  bankAccounts        adhrs_employee_bank_account[]
+  certificates        adhrs_employee_certificate[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([country_code])
+  @@map("country")
+}
+
+model bank {
+  id              Int                           @id @default(autoincrement())
+  bank_code       String
+  bank_name       String
+  bank_name_short String?
+  country         country?                      @relation(fields: [country_id], references: [id])
+  country_id      Int?
+  bankAccounts    adhrs_employee_bank_account[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([bank_code])
+  @@map("bank")
+}
+
+model currency {
+  id            Int                           @id @default(autoincrement())
+  currency_code String
+  currency_name String
+  symbol        String?
+  bankAccounts  adhrs_employee_bank_account[]
+  compensations adhrs_employee_compensation[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([currency_code])
+  @@map("currency")
+}
+
+model id_document_type {
+  id                 Int                            @id @default(autoincrement())
+  document_type_name String
+  country            country?                       @relation(fields: [country_id], references: [id])
+  country_id         Int?
+  persons            adhrs_employee_basic_info[]
+  familyMembers      adhrs_employee_family_member[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@map("id_document_type")
+}
+
+model legal_entity_register_number_type {
+  id            Int                  @id @default(autoincrement())
+  code          String
+  name          String
+  description   String?
+  country       country?             @relation(fields: [country_id], references: [id])
+  country_id    Int?
+  legalEntities adhrs_legal_entity[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([code])
+  @@map("legal_entity_register_number_type")
+}
+
+model location {
+  id                 Int                          @id @default(autoincrement())
+  code               String
+  name               String
+  level              Int
+  country            country?                     @relation(fields: [country_id], references: [id])
+  country_id         Int?
+  parent             location?                    @relation("locationTree", fields: [parentId], references: [id])
+  parentId           Int?
+  children           location[]                   @relation("locationTree")
+  // reverse refs for employee-version office/work location FKs
+  empOfficeLocations adhrsEmployeeOrgAssignment[] @relation("empOfficeLocation")
+  empWorkLocations   adhrsEmployeeOrgAssignment[] @relation("empWorkLocation")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([code])
+  @@map("location")
+}
+
+// ============================================================================
+// HRS Contract Type dictionary (global, no tenantId)
+// ============================================================================
+
+model adhrs_hrs_contract_type {
+  id           Int                                    @id @default(autoincrement())
+  code         String
+  name         String
+  contracts    adhrs_contract[]
+  cmsRelations adhrs_hrs_cms_contract_type_realtion[]
+  contractSeqs adhrs_contract_seq[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+
+  @@unique([code])
+  @@map("adhrs_hrs_contract_type")
+}
+
+// ============================================================================
+// Masters
+// ============================================================================
+
+model adhrsEmployees {
+  id                Int       @id @default(autoincrement())
+  code              String
+  name              String
+  status            Boolean   @default(true)
+  hireDate          DateTime
+  employmentEndDate DateTime?
+  userId            Int?
+
+  versions            adhrsEmployeeOrgAssignment[]              @relation("employeeVersions")
+  reportToOf          adhrsEmployeeOrgAssignment[]              @relation("reportTo")
+  operationalLeaderOf adhrsEmployeeOrgAssignment[]              @relation("opLeader")
+  functionalLeaderOf  adhrsEmployeeOrgAssignment[]              @relation("funcLeader")
+  departmentHeadOf    adhrsOrganizationVersions[]               @relation("orgDepartmentHead")
+  persons             adhrs_employee_basic_info[]
+  bankAccounts        adhrs_employee_bank_account[]
+  socialSecurity      adhrs_employee_social_security[]
+  workExperience      adhrs_employee_work_experience[]
+  educationBackground adhrs_employee_education_background[]
+  compensation        adhrs_employee_compensation[]
+  familyMembers       adhrs_employee_family_member[]
+  emergencyContacts   adhrs_employee_emergency_contact[]
+  certificates        adhrs_employee_certificate[]
+  contractPersonRels  adhrs_employee_contract_person_relation[]
+  contracts           adhrs_contract[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([code])
+  @@index([name])
+  @@map("adhrs_employees")
+}
+
+model adhrsOrganizations {
+  id            Int     @id @default(autoincrement())
+  code          String
+  orgName       String
+  status        Boolean @default(true)
+  structureType String? // 'Business' | 'Administrative'
+
+  versions            adhrsOrganizationVersions[]  @relation("orgVersions")
+  parentOrgOf         adhrsOrganizationVersions[]  @relation("orgTree")
+  positionVersionOrgs adhrsPositionVersions[]
+  employeeVersionOrgs adhrsEmployeeOrgAssignment[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([code])
+  @@index([orgName])
+  @@map("adhrs_organizations")
+}
+
+model adhrsPositions {
+  id           Int     @id @default(autoincrement())
+  code         String
+  positionName String
+  status       Boolean @default(true)
+
+  versions                 adhrsPositionVersions[]      @relation("positionVersions")
+  employeeVersionPositions adhrsEmployeeOrgAssignment[] @relation("positionRef")
+  employeeVersionSecondary adhrsEmployeeOrgAssignment[] @relation("empVerSecondaryPos")
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([code])
+  @@index([positionName])
+  @@map("adhrs_positions")
+}
+
+model adhrs_legal_entity {
+  id                      Int                                    @id @default(autoincrement())
+  entity_name             String
+  register_number         String
+  register_number_type    legal_entity_register_number_type?     @relation(fields: [register_number_type_id], references: [id])
+  register_number_type_id Int?
+  country                 country?                               @relation(fields: [country_id], references: [id])
+  country_id              Int?
+  contractRelations       adhrs_legal_entity_contract_relation[]
+  cmsRelations            adhrs_hrs_cms_legal_entity_realtion[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([register_number])
+  @@map("adhrs_legal_entity")
+}
+
+model adhrs_system_state {
+  id          Int    @id @default(autoincrement())
+  state_key   String
+  state_value Json
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([state_key])
+  @@map("adhrs_system_state")
+}
+
+// Atomic, concurrency-safe code-generation sequence. Replaces the KV-counter
+// approach over adhrs_system_state: UPDATE SET lastSeq = lastSeq + 1 is atomic
+// under row-level locking on both SQLite and MySQL, eliminating the
+// concurrent-codegen race and lost-update counter regression.
+model adhrs_code_seq {
+  id       Int    @id @default(autoincrement())
+  codeType String // "orgCode" | "employeeCode" | "positionCode"
+  prefix   String
+  lastSeq  Int    @default(0)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([codeType, prefix])
+  @@map("adhrs_code_seq")
+}
+
+model adhrs_contract {
+  id                   Int                                    @id @default(autoincrement())
+  conctract_no         String // [sic] preserve source typo
+  contract_title       String?
+  contract_type        adhrs_hrs_contract_type?               @relation(fields: [contract_type_id], references: [id])
+  contract_type_id     Int?
+  employee             adhrsEmployees?                        @relation(fields: [employee_id], references: [id])
+  employee_id          Int?
+  employee_version     adhrsEmployeeOrgAssignment?            @relation(fields: [employee_version_id], references: [id])
+  employee_version_id  Int?
+  legalEntityRelations adhrs_legal_entity_contract_relation[]
+
+  action_type         String?
+  term_type           String?
+  status              String?
+  sign_date           DateTime?
+  effective_date      DateTime?
+  expire_date         DateTime?
+  terminate_date      DateTime?
+  contract_attachment Json? // v1: [{name,url,mime,size}]
+  cms_contract_uuid   String?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([conctract_no])
+  @@map("adhrs_contract")
+}
+
+// ============================================================================
+// Version tables
+// ============================================================================
+
+model adhrsEmployeeOrgAssignment {
+  id         Int            @id @default(autoincrement())
+  employee   adhrsEmployees @relation("employeeVersions", fields: [employeeId], references: [id])
+  employeeId Int
+
+  org                         adhrsOrganizations? @relation(fields: [orgId], references: [id])
+  orgId                       Int?
+  position                    adhrsPositions?     @relation("positionRef", fields: [positionId], references: [id])
+  positionId                  Int?
+  secondaryPosition           adhrsPositions?     @relation("empVerSecondaryPos", fields: [secondaryPositionId], references: [id])
+  secondaryPositionId         Int?
+  reportToEmployee            adhrsEmployees?     @relation("reportTo", fields: [reportToEmployeeId], references: [id])
+  reportToEmployeeId          Int?
+  operationalLeaderEmployee   adhrsEmployees?     @relation("opLeader", fields: [operationalLeaderEmployeeId], references: [id])
+  operationalLeaderEmployeeId Int?
+  functionalLeaderEmployee    adhrsEmployees?     @relation("funcLeader", fields: [functionalLeaderEmployeeId], references: [id])
+  functionalLeaderEmployeeId  Int?
+
+  office_location         String?
+  work_location           String?
+  officeLocation          location? @relation("empOfficeLocation", fields: [office_location_id], references: [id])
+  office_location_id      Int?
+  workLocation            location? @relation("empWorkLocation", fields: [work_location_id], references: [id])
+  work_location_id        Int?
+  employment_type         String?
+  event_type              String? // ORG_EVENT_TYPES: Onboard|Probation|Transfer|Promotion|SecondaryChange|Offboard|Retire|Rehire|Other
+  event_reason            String? // free-text / sub-reason (e.g. resignation-voluntary, contract-expired, transfer-involuntary)
+  managing_people_or_not  Boolean   @default(false)
+  payment_final_approvers Json? // [employeeId,...] OT final approver person-picker (folded from former m2m)
+  effectiveDate           DateTime
+  expirationDate          DateTime?
+  current_version         Boolean   @default(false)
+
+  persons                 adhrs_employee_basic_info[]
+  bankAccounts            adhrs_employee_bank_account[]
+  socialSecurity          adhrs_employee_social_security[]
+  compensation            adhrs_employee_compensation[]
+  contractPersonRelations adhrs_employee_contract_person_relation[]
+  contracts               adhrs_contract[]
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([employeeId, effectiveDate])
+  @@index([employeeId, current_version])
+  @@index([effectiveDate])
+  @@map("adhrs_employee_org_assignment")
+}
+
+model adhrsOrganizationVersions {
+  id               Int                 @id @default(autoincrement())
+  org              adhrsOrganizations  @relation("orgVersions", fields: [orgId], references: [id])
+  orgId            Int
+  orgName          String
+  orgType          String?
+  costCenterCode   String?
+  departmentHead   adhrsEmployees?     @relation("orgDepartmentHead", fields: [departmentHeadId], references: [id])
+  departmentHeadId Int?
+  parentOrg        adhrsOrganizations? @relation("orgTree", fields: [parentOrgId], references: [id])
+  parentOrgId      Int?
+  effectiveDate    DateTime
+  expirationDate   DateTime?
+  current_version  Boolean             @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([orgId, effectiveDate])
+  @@index([orgId, current_version])
+  @@index([effectiveDate])
+  @@index([parentOrgId])
+  @@index([departmentHeadId])
+  @@map("adhrs_organization_versions")
+}
+
+model adhrsPositionVersions {
+  id              Int                 @id @default(autoincrement())
+  position        adhrsPositions      @relation("positionVersions", fields: [positionId], references: [id])
+  positionId      Int
+  positionName    String
+  org             adhrsOrganizations? @relation(fields: [orgId], references: [id])
+  orgId           Int?
+  job_level       String?
+  effectiveDate   DateTime
+  expirationDate  DateTime?
+  current_version Boolean             @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  deletedAt DateTime?
+  tenantId  Int?
+
+  @@unique([positionId, effectiveDate])
+  @@index([positionId, current_version])
+  @@index([effectiveDate])
+  @@map("adhrs_position_versions")
+}
+
+// ============================================================================
+// Employee sub-records (detail tables) — soft-deleted
+// ============================================================================
+
+model adhrs_employee_basic_info {
+  id                  Int                         @id @default(autoincrement())
+  employee            adhrsEmployees              @relation(fields: [employee_id], references: [id])
+  employee_id         Int
+  employee_version    adhrsEmployeeOrgAssignment? @relation(fields: [employee_version_id], references: [id])
+  employee_version_id Int?
+
+  name                           String
+  local_language_name            String?
+  gender                         String?
+  birth_date                     DateTime?
+  email                          String?
+  mobile_phone                   String?
+  home_tel                       String?
+  id_document_type               id_document_type? @relation(fields: [id_document_type_id], references: [id])
+  id_document_type_id            Int?
+  id_document_number             String?
+  id_document_address            String?
+  country                        country?          @relation(fields: [country_id], references: [id])
+  country_id                     Int?
+  province                       String?
+  city                           String?
+  district                       String?
+  home_address_details           String?
+  mailing_address                String?
+  hukou_location                 String?
+  place_of_birth                 String?
+  marital_status                 String?
+  health_status                  String?
+  degree                         String?
+  photo_url                      String?
+  nationality                    String?
+  /// deprecated: use adhrs_employee_emergency_contact (multi-row) instead
+  emergency_contact_name         String?
+  /// deprecated: use adhrs_employee_emergency_contact (multi-row) instead
+  emergency_contact_phone        String?
+  /// deprecated: use adhrs_employee_emergency_contact (multi-row) instead
+  emergency_contact_relationship String?
+
+  current_version Boolean   @default(false)
+  effectiveDate   DateTime
+  expirationDate  DateTime?
+  deletedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id, current_version])
+  @@index([id_document_number])
+  @@map("adhrs_employee_basic_info")
+}
+
+model adhrs_employee_bank_account {
+  id                  Int                           @id @default(autoincrement())
+  employee            adhrsEmployees                @relation(fields: [employee_id], references: [id])
+  employee_id         Int
+  employee_version    adhrsEmployeeOrgAssignment?   @relation(fields: [employee_version_id], references: [id])
+  employee_version_id Int?
+  account_holder_name String
+  bank                bank?                         @relation(fields: [bank_id], references: [id])
+  bank_id             Int?
+  currency            currency?                     @relation(fields: [currency_id], references: [id])
+  currency_id         Int?
+  country             country?                      @relation(fields: [country_id], references: [id])
+  country_id          Int?
+  effective_date      DateTime
+  expiration_date     DateTime?
+  current_version     Boolean                       @default(false)
+  attachment          Json?
+  compensations       adhrs_employee_compensation[]
+  deletedAt           DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id, current_version])
+  @@map("adhrs_employee_bank_account")
+}
+
+model adhrs_employee_social_security {
+  id                                   Int                         @id @default(autoincrement())
+  employee                             adhrsEmployees              @relation(fields: [employee_id], references: [id])
+  employee_id                          Int
+  employee_version                     adhrsEmployeeOrgAssignment? @relation(fields: [employee_version_id], references: [id])
+  employee_version_id                  Int?
+  sscn                                 String?
+  hpf_account                          String?
+  title                                String?
+  spouse                               String?
+  spouse_id_number                     String?
+  first_time_to_check_social_insurance Boolean                     @default(false)
+  effective_date                       DateTime
+  expiration_date                      DateTime?
+  current_version                      Boolean                     @default(false)
+  deletedAt                            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id, current_version])
+  @@index([sscn])
+  @@map("adhrs_employee_social_security")
+}
+
+model adhrs_employee_education_background {
+  id          Int            @id @default(autoincrement())
+  employee    adhrsEmployees @relation(fields: [employee_id], references: [id])
+  employee_id Int
+  degree      String?
+  major       String?
+  minor       String?
+  school_name String?
+  start_date  DateTime?
+  end_date    DateTime?
+  deletedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@map("adhrs_employee_education_background")
+}
+
+model adhrs_employee_work_experience {
+  id           Int            @id @default(autoincrement())
+  employee     adhrsEmployees @relation(fields: [employee_id], references: [id])
+  employee_id  Int
+  company_name String?
+  job_title    String?
+  start_date   DateTime?
+  end_date     DateTime?
+  leave_reason String?
+  deletedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@map("adhrs_employee_work_experience")
+}
+
+// ============================================================================
+// Junction / mapping tables
+// ============================================================================
+
+// m2m: legal entity <-> contract
+model adhrs_legal_entity_contract_relation {
+  id              Int                @id @default(autoincrement())
+  legal_entity    adhrs_legal_entity @relation(fields: [legal_entity_id], references: [id])
+  legal_entity_id Int
+  contract        adhrs_contract     @relation(fields: [contract_id], references: [id])
+  contract_id     Int
+  deletedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@unique([legal_entity_id, contract_id])
+  @@map("adhrs_legal_entity_contract_relation")
+}
+
+// HRS employee <-> CMS contract person UUID mapping
+model adhrs_employee_contract_person_relation {
+  id                   Int                         @id @default(autoincrement())
+  employee             adhrsEmployees              @relation(fields: [employee_id], references: [id])
+  employee_id          Int
+  employee_version     adhrsEmployeeOrgAssignment? @relation(fields: [employee_version_id], references: [id])
+  employee_version_id  Int?
+  contract_person_uuid String
+  deletedAt            DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@unique([contract_person_uuid])
+  @@map("adhrs_employee_contract_person_relation")
+}
+
+// HRS contract type <-> CMS contract type UUID mapping ([sic] typo preserved)
+model adhrs_hrs_cms_contract_type_realtion {
+  id                     Int                     @id @default(autoincrement())
+  contract_type          adhrs_hrs_contract_type @relation(fields: [contract_type_id], references: [id])
+  contract_type_id       Int
+  cms_contract_type_uuid String
+  deletedAt              DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@unique([cms_contract_type_uuid])
+  @@map("adhrs_hrs_cms_contract_type_realtion")
+}
+
+// HRS legal entity <-> CMS legal entity UUID mapping ([sic] typo preserved)
+model adhrs_hrs_cms_legal_entity_realtion {
+  id                    Int                @id @default(autoincrement())
+  legal_entity          adhrs_legal_entity @relation(fields: [legal_entity_id], references: [id])
+  legal_entity_id       Int
+  cms_legal_entity_uuid String
+  deletedAt             DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@unique([cms_legal_entity_uuid])
+  @@map("adhrs_hrs_cms_legal_entity_realtion")
+}
+
+// Contract daily sequence: keyed by (contract_type_id, seq_date)
+model adhrs_contract_seq {
+  id               Int                     @id @default(autoincrement())
+  contract_type    adhrs_hrs_contract_type @relation(fields: [contract_type_id], references: [id])
+  contract_type_id Int
+  seq_date         DateTime
+  current_seq      Int                     @default(0)
+  deletedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@unique([contract_type_id, seq_date])
+  @@map("adhrs_contract_seq")
+}
+
+// ============================================================================
+// Employee infotype — Compensation (effective-dated: salary history)
+// ============================================================================
+
+model adhrs_employee_compensation {
+  id                  Int                          @id @default(autoincrement())
+  employee            adhrsEmployees               @relation(fields: [employee_id], references: [id])
+  employee_id         Int
+  employee_version    adhrsEmployeeOrgAssignment?  @relation(fields: [employee_version_id], references: [id])
+  employee_version_id Int?
+  bank_account        adhrs_employee_bank_account? @relation(fields: [bank_account_id], references: [id])
+  bank_account_id     Int?
+  currency            currency?                    @relation(fields: [currency_id], references: [id])
+  currency_id         Int?
+
+  pay_type        String? // Monthly|Annual|Hourly|Piece|Other
+  pay_grade       String?
+  pay_level       String?
+  base_salary     Decimal?
+  allowances      Json? // [{name, amount, type}]
+  effective_date  DateTime
+  expiration_date DateTime?
+  current_version Boolean   @default(false)
+  attachment      Json?
+  deletedAt       DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id, current_version])
+  @@map("adhrs_employee_compensation")
+}
+
+// ============================================================================
+// Employee infotype — Family member / social relation (current-state record)
+// ============================================================================
+
+model adhrs_employee_family_member {
+  id                  Int               @id @default(autoincrement())
+  employee            adhrsEmployees    @relation(fields: [employee_id], references: [id])
+  employee_id         Int
+  id_document_type    id_document_type? @relation(fields: [id_document_type_id], references: [id])
+  id_document_type_id Int?
+
+  name               String
+  relationship       String? // Spouse|Parent|Child|Sibling|Relative|Other
+  gender             String?
+  birth_date         DateTime?
+  id_document_number String?
+  is_dependent       Boolean   @default(false) // 受抚养 → 个税专项附加扣除
+  cohabiting         Boolean   @default(false)
+  employer           String?
+  phone              String?
+  deletedAt          DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id])
+  @@map("adhrs_employee_family_member")
+}
+
+// ============================================================================
+// Employee infotype — Emergency contact (current-state, multi-row)
+// ============================================================================
+
+model adhrs_employee_emergency_contact {
+  id          Int            @id @default(autoincrement())
+  employee    adhrsEmployees @relation(fields: [employee_id], references: [id])
+  employee_id Int
+
+  name         String
+  relationship String?
+  phone        String?
+  email        String?
+  is_primary   Boolean   @default(false)
+  deletedAt    DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id])
+  @@map("adhrs_employee_emergency_contact")
+}
+
+// ============================================================================
+// Employee infotype — Certificate / license (event with issue/expiry)
+// ============================================================================
+
+model adhrs_employee_certificate {
+  id          Int            @id @default(autoincrement())
+  employee    adhrsEmployees @relation(fields: [employee_id], references: [id])
+  employee_id Int
+  country     country?       @relation(fields: [country_id], references: [id])
+  country_id  Int?
+
+  type              String? // Passport|Qualification|DriverLicense|Degree|Other
+  name              String?
+  number            String?
+  issue_date        DateTime?
+  expiry_date       DateTime?
+  issuing_authority String?
+  attachment        Json?
+  deletedAt         DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  createdBy Int?
+  updatedBy Int?
+  tenantId  Int?
+
+  @@index([employee_id, expiry_date])
+  @@map("adhrs_employee_certificate")
+}
